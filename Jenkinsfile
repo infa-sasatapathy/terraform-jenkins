@@ -83,7 +83,7 @@ pipeline {
                 script {
                     echo "Running Terratest for Terraform code in branch: ${params['GIT BRANCH']}"
 
-                    // Assumes you have Go + Terratest installed
+                    // Assumes Go + Terratest installed
                     sh '''
                         cd test
                         go mod tidy
@@ -153,12 +153,10 @@ pipeline {
 
                     echo "Waiting for manual approval to ${actionText} changes in branch: ${params['GIT BRANCH']}..."
 
-                    // First approval with timeout
                     timeout(time: 1, unit: 'HOURS') {
                         input message: "Do you want to ${actionText} the Terraform changes in branch: ${params['GIT BRANCH']}?", ok: buttonText
                     }
 
-                    // Extra safeguard for production destroy
                     if (params['TERRAFORM ACTION'] == 'destroy' && params['GIT BRANCH'] == 'prd') {
                         echo "⚠️ Extra approval required for destroying resources in PRODUCTION!"
                         timeout(time: 1, unit: 'HOURS') {
@@ -195,29 +193,63 @@ pipeline {
                 }
             }
             post {
-                success {
-                    echo "Terraform ${params['TERRAFORM ACTION']} for branch: ${params['GIT BRANCH']} completed successfully!"
-                }
-                failure {
-                    echo "Terraform ${params['TERRAFORM ACTION']} for branch: ${params['GIT BRANCH']} failed!"
-                }
                 always {
                     sh 'rm -f *.tfplan'
                     archiveArtifacts artifacts: 'terraform.log', allowEmptyArchive: true
                 }
             }
         }
-    }
 
-    post {
-        always {
-            echo "Pipeline execution for branch: ${params['GIT BRANCH']} completed"
-        }
-        success {
-            echo 'Pipeline executed successfully!'
-        }
-        failure {
-            echo 'Pipeline failed!'
+        stage('Finalize') {
+            steps {
+                script {
+                    echo "Pipeline execution for branch: ${params['GIT BRANCH']} completed"
+
+                    if (currentBuild.currentResult == 'SUCCESS') {
+                        echo '✅ Pipeline executed successfully!'
+
+                        // Slack notification (requires Slack plugin)
+                        slackSend(
+                            channel: '#alerts',
+                            color: 'good',
+                            message: "✅ SUCCESS: Terraform ${params['TERRAFORM ACTION']} completed for *${params['GIT BRANCH']}*.\nJob: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
+                        )
+
+                        // Email notification
+                        emailext(
+                            subject: "✅ SUCCESS: Terraform ${params['TERRAFORM ACTION']} for ${params['GIT BRANCH']}",
+                            body: """Pipeline succeeded.
+
+Job: ${env.JOB_NAME} #${env.BUILD_NUMBER}
+Branch: ${params['GIT BRANCH']}
+Action: ${params['TERRAFORM ACTION']}
+""",
+                            to: "devops-team@example.com"
+                        )
+
+                    } else {
+                        echo '❌ Pipeline failed!'
+
+                        slackSend(
+                            channel: '#alerts',
+                            color: 'danger',
+                            message: "❌ FAILURE: Terraform ${params['TERRAFORM ACTION']} failed for *${params['GIT BRANCH']}*.\nJob: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
+                        )
+
+                        emailext(
+                            subject: "❌ FAILURE: Terraform ${params['TERRAFORM ACTION']} for ${params['GIT BRANCH']}",
+                            body: """Pipeline failed.
+
+Job: ${env.JOB_NAME} #${env.BUILD_NUMBER}
+Branch: ${params['GIT BRANCH']}
+Action: ${params['TERRAFORM ACTION']}
+Check Jenkins logs for details.
+""",
+                            to: "devops-team@example.com"
+                        )
+                    }
+                }
+            }
         }
     }
 }
