@@ -1,6 +1,11 @@
 pipeline {
     agent any
 
+    options {
+        // Prevent Jenkins from doing its own hidden "Declarative: Checkout SCM"
+        skipDefaultCheckout(true)
+    }
+
     parameters {
         choice(
             name: 'GIT BRANCH',
@@ -33,11 +38,11 @@ pipeline {
         AWS_DEFAULT_REGION = "${params['AWS_DEFAULT_REGION']}"
         TF_LOG             = "${params['TF_LOG']}"
         TF_LOG_PATH        = "${params['TF_LOG_PATH']}"
-        ENVIRONMENT        = "${params['GIT BRANCH']}"  // environment = selected branch
+        ENVIRONMENT        = "${params['GIT BRANCH']}"
     }
 
     stages {
-        stage('Checkout') {
+        stage('Checkout SCM') {
             steps {
                 script {
                     echo "Checking out branch: ${params['GIT BRANCH']}"
@@ -70,6 +75,29 @@ pipeline {
             }
         }
 
+        stage('Terratest') {
+            when {
+                expression { params['TERRAFORM ACTION'] == 'plan' || params['TERRAFORM ACTION'] == 'apply' }
+            }
+            steps {
+                script {
+                    echo "Running Terratest for Terraform code in branch: ${params['GIT BRANCH']}"
+
+                    // Assumes you have Go + Terratest installed
+                    sh '''
+                        cd test
+                        go mod tidy
+                        go test -v -timeout 30m
+                    '''
+                }
+            }
+            post {
+                failure {
+                    error("Terratest failed! Fix tests before proceeding.")
+                }
+            }
+        }
+
         stage('Plan') {
             when {
                 anyOf {
@@ -87,7 +115,6 @@ pipeline {
                         env.AWS_ACCESS_KEY_ID = AWS_ACCESS_KEY_ID
                         env.AWS_SECRET_ACCESS_KEY = AWS_SECRET_ACCESS_KEY
 
-                        // unique tfplan filename
                         def tfplanFile = "terraform-${params['GIT BRANCH']}-${System.currentTimeMillis()}.tfplan"
                         env.TFPLAN_FILE = tfplanFile
 
@@ -96,12 +123,10 @@ pipeline {
                         if (params['TERRAFORM ACTION'] == 'destroy') {
                             sh """
                                 terraform plan -destroy -var="environment=${params['GIT BRANCH']}" -out=${tfplanFile} -input=false
-                                echo "Terraform destroy plan created successfully: ${tfplanFile}"
                             """
                         } else {
                             sh """
                                 terraform plan -var="environment=${params['GIT BRANCH']}" -out=${tfplanFile} -input=false
-                                echo "Terraform plan created successfully: ${tfplanFile}"
                             """
                         }
                     }
@@ -128,43 +153,18 @@ pipeline {
 
                     echo "Waiting for manual approval to ${actionText} changes in branch: ${params['GIT BRANCH']}..."
 
-                    // 🔔 Send notification if it's a destroy in prd
-                    if (params['TERRAFORM ACTION'] == 'destroy' && params['GIT BRANCH'] == 'prd') {
-                        echo "⚠️ ALERT: Destroy requested for PRODUCTION!"
-                        
-                        // Slack notification (requires Jenkins Slack plugin configured)
-                        slackSend(
-                            channel: '#alerts',
-                            color: 'danger',
-                            message: "⚠️ Jenkins Alert: Terraform DESTROY requested on *PRODUCTION* (branch: prd).\nJob: ${env.JOB_NAME} #${env.BUILD_NUMBER}\nTriggered by: ${currentBuild.getBuildCauses()[0].userId}"
-                        )
-
-                        // Email notification (requires Jenkins Mailer configured)
-                        emailext(
-                            subject: "⚠️ ALERT: Terraform DESTROY requested on PRODUCTION",
-                            body: """A Jenkins job has requested Terraform DESTROY on PRODUCTION.
-
-Job: ${env.JOB_NAME} #${env.BUILD_NUMBER}
-Branch: ${params['GIT BRANCH']}
-Action: ${params['TERRAFORM ACTION']}
-Triggered by: ${currentBuild.getBuildCauses()[0].userId}
-
-Please review the job in Jenkins before approving.
-""",
-                            to: "devops-team@example.com"
-                        )
+                    // First approval with timeout
+                    timeout(time: 1, unit: 'HOURS') {
+                        input message: "Do you want to ${actionText} the Terraform changes in branch: ${params['GIT BRANCH']}?", ok: buttonText
                     }
 
-                    // First approval
-                    input message: "Do you want to ${actionText} the Terraform changes in branch: ${params['GIT BRANCH']}?", ok: buttonText
-
-                    // 🔒 Extra safeguard: require second approval for destroy in prd
+                    // Extra safeguard for production destroy
                     if (params['TERRAFORM ACTION'] == 'destroy' && params['GIT BRANCH'] == 'prd') {
                         echo "⚠️ Extra approval required for destroying resources in PRODUCTION!"
-                        input message: "FINAL CONFIRMATION: Do you REALLY want to DESTROY resources in PRODUCTION (branch: prd)?", ok: "Yes, Destroy PRODUCTION"
+                        timeout(time: 1, unit: 'HOURS') {
+                            input message: "FINAL CONFIRMATION: Do you REALLY want to DESTROY resources in PRODUCTION (branch: prd)?", ok: "Yes, Destroy PRODUCTION"
+                        }
                     }
-
-                    echo "Approval(s) received, proceeding to ${actionText} stage"
                 }
             }
         }
@@ -190,7 +190,6 @@ Please review the job in Jenkins before approving.
                         echo "${actionText.capitalize()} Terraform changes for branch: ${params['GIT BRANCH']} using plan file: ${env.TFPLAN_FILE}..."
                         sh """
                             terraform apply -auto-approve ${env.TFPLAN_FILE}
-                            echo "Terraform ${params['TERRAFORM ACTION']} completed successfully"
                         """
                     }
                 }
