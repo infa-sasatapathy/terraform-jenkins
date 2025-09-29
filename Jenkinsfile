@@ -17,7 +17,7 @@ pipeline {
             description: 'Choose Terraform action: plan, apply to create/update resources, or destroy to remove all resources'
         )
         string(
-            name: 'AWS_DEFAULT_REGION',
+            name: 'AWS REGION',
             defaultValue: 'us-east-1',
             description: 'AWS Region for Terraform deployment'
         )
@@ -49,8 +49,8 @@ pipeline {
                     def jobName = env.JOB_NAME.toLowerCase()
                     def defaultBranch = "dev"  // fallback
 
-                    if (jobName.contains("prd")) {
-                        defaultBranch = "prd"
+                    if (jobName.contains("prod")) {
+                        defaultBranch = "prod"
                     } else if (jobName.contains("stg")) {
                         defaultBranch = "stg"
                     } else if (jobName.contains("dev")) {
