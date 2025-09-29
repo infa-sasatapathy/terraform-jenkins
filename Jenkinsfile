@@ -4,7 +4,7 @@ pipeline {
     parameters {
         choice(
             name: 'GIT_BRANCH',
-            choices: ['dev', 'stg', 'prd'],
+            choices: ['dev', 'stg', 'prod'],
             description: 'Select the Git branch (environment) to deploy/destroy'
         )
         choice(
