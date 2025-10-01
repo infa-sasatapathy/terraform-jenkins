@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     options {
-        skipDefaultCheckout(true)
+        skipDefaultCheckout(true)  // avoid the hidden "Declarative: Checkout SCM"
     }
 
     parameters {
@@ -17,8 +17,8 @@ pipeline {
             description: 'Choose Terraform action: plan, apply to create/update resources, or destroy to remove all resources'
         )
         string(
-            name: 'AWS REGION',
-            defaultValue: 'us-east-1',
+            name: 'AWS_DEFAULT_REGION',
+            defaultValue: 'ap-south-1',
             description: 'AWS Region for Terraform deployment'
         )
         choice(
@@ -34,20 +34,18 @@ pipeline {
     }
 
     environment {
-        // Default environment = job name suffix
-        ENVIRONMENT = ''
         AWS_DEFAULT_REGION = "${params['AWS_DEFAULT_REGION']}"
         TF_LOG             = "${params['TF_LOG']}"
         TF_LOG_PATH        = "${params['TF_LOG_PATH']}"
+        ENVIRONMENT        = ""  // will be set in Set Default Branch stage
     }
 
     stages {
         stage('Set Default Branch') {
             steps {
                 script {
-                    // Extract job name suffix (after last "-")
                     def jobName = env.JOB_NAME.toLowerCase()
-                    def defaultBranch = "dev"  // fallback
+                    def defaultBranch = "dev" // fallback branch
 
                     if (jobName.contains("prod")) {
                         defaultBranch = "prod"
@@ -57,14 +55,15 @@ pipeline {
                         defaultBranch = "dev"
                     }
 
-                    // If no user override, set param to default
-                    if (!params['GIT BRANCH']) {
-                        env.ENVIRONMENT = defaultBranch
-                        echo "No GIT BRANCH provided, defaulting to: ${defaultBranch} (based on job name)"
-                    } else {
+                    if (params['GIT BRANCH']) {
                         env.ENVIRONMENT = params['GIT BRANCH']
-                        echo "Using user-selected GIT BRANCH: ${params['GIT BRANCH']}"
+                        echo "Using user-selected GIT BRANCH: ${env.ENVIRONMENT}"
+                    } else {
+                        env.ENVIRONMENT = defaultBranch
+                        echo "No GIT BRANCH provided, defaulting to: ${env.ENVIRONMENT} (based on job name)"
                     }
+
+                    echo "DEBUG → params['GIT BRANCH'] = ${params['GIT BRANCH']}, env.ENVIRONMENT = ${env.ENVIRONMENT}"
                 }
             }
         }
@@ -78,7 +77,7 @@ pipeline {
                         branches: [[name: "*/${env.ENVIRONMENT}"]],
                         userRemoteConfigs: [[
                             url: 'git@github.com:infa-sasatapathy/terraform-vpc.git',
-                            credentialsId: 'jenkins'
+                            credentialsId: 'github-ssh-key'
                         ]]
                     ])
                 }
@@ -124,6 +123,8 @@ pipeline {
                     def tfplanFile = "terraform-${env.ENVIRONMENT}-${System.currentTimeMillis()}.tfplan"
                     env.TFPLAN_FILE = tfplanFile
 
+                    echo "Creating plan for ${params['TERRAFORM ACTION']} in ${env.ENVIRONMENT}"
+
                     if (params['TERRAFORM ACTION'] == 'destroy') {
                         sh """
                             terraform plan -destroy -var="environment=${env.ENVIRONMENT}" -out=${tfplanFile} -input=false
@@ -133,6 +134,11 @@ pipeline {
                             terraform plan -var="environment=${env.ENVIRONMENT}" -out=${tfplanFile} -input=false
                         """
                     }
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: '*.tfplan,terraform.log', allowEmptyArchive: true
                 }
             }
         }
