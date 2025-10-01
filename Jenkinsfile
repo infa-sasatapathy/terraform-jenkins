@@ -77,7 +77,7 @@ pipeline {
                         $class: 'GitSCM',
                         branches: [[name: "*/${env.ENVIRONMENT}"]],
                         userRemoteConfigs: [[
-                            url: 'git@github.com:infa-sasatapathy/terraform-jenkins.git',
+                            url: 'git@github.com:infa-sasatapathy/terraform-vpc.git',
                             credentialsId: 'github-ssh-key'
                         ]]
                     ])
