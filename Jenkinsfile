@@ -153,9 +153,9 @@ pipeline {
                         input message: "Approve ${actionText} on ${env.ENVIRONMENT}?", ok: buttonText
                     }
 
-                    if (params['TERRAFORM ACTION'] == 'destroy' && env.ENVIRONMENT == 'prd') {
+                    if (params['TERRAFORM ACTION'] == 'destroy' && env.ENVIRONMENT == 'prod') {
                         timeout(time: 1, unit: 'HOURS') {
-                            input message: "⚠️ FINAL CONFIRMATION: Destroy PRODUCTION (branch: prd)?", ok: "Yes, Destroy PRODUCTION"
+                            input message: "⚠️ FINAL CONFIRMATION: Destroy PRODUCTION (branch: prod)?", ok: "Yes, Destroy PRODUCTION"
                         }
                     }
                 }
