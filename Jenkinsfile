@@ -1,49 +1,34 @@
 pipeline {
     agent any
 
-    options {
-        skipDefaultCheckout(true)
-    }
-
     parameters {
         choice(
-            name: 'GIT BRANCH',
+            name: 'GIT_BRANCH',
             choices: ['dev', 'stg', 'prod'],
             description: 'Select the Git branch (environment) to deploy/destroy'
         )
         choice(
-            name: 'TERRAFORM ACTION',
+            name: 'TERRAFORM_ACTION',
             choices: ['plan', 'apply', 'destroy'],
-            description: 'Choose Terraform action'
+            description: 'Choose Terraform action: plan, apply or destroy'
         )
         string(
             name: 'AWS_DEFAULT_REGION',
-            defaultValue: 'ap-south-1',
-            description: 'AWS Region'
-        )
-        choice(
-            name: 'TF_LOG',
-            choices: ['INFO', 'WARN', 'ERROR', 'DEBUG', 'TRACE'],
-            description: 'Terraform log level'
-        )
-        string(
-            name: 'TF_LOG_PATH',
-            defaultValue: 'terraform.log',
-            description: 'Terraform log path'
+            defaultValue: 'us-east-1',
+            description: 'AWS Region for Terraform deployment'
         )
     }
 
     environment {
-        AWS_DEFAULT_REGION = "${params['AWS_DEFAULT_REGION']}"
-        TF_LOG             = "${params['TF_LOG']}"
-        TF_LOG_PATH        = "${params['TF_LOG_PATH']}"
+        AWS_DEFAULT_REGION = "${params.AWS_DEFAULT_REGION}"
+        ENVIRONMENT        = "${params.GIT_BRANCH}"
     }
 
     stages {
         stage('Set Branch') {
             steps {
                 script {
-                    echo "Using branch from parameter: ${params['GIT BRANCH']}"
+                    echo "Using branch from parameter: ${params.GIT_BRANCH}"
                 }
             }
         }
@@ -51,15 +36,11 @@ pipeline {
         stage('Checkout SCM') {
             steps {
                 script {
-                    def branchName = params['GIT BRANCH'].toString()
-                    echo "Checking out branch: ${branchName}"
+                    echo "Checking out branch: ${params.GIT_BRANCH}"
                     checkout([
                         $class: 'GitSCM',
-                        branches: [[name: "*/${branchName}"]],
-                        userRemoteConfigs: [[
-                            url: 'git@github.com:infa-sasatapathy/terraform-vpc.git',
-                            credentialsId: 'jenkins'
-                        ]]
+                        branches: [[name: "*/${params.GIT_BRANCH}"]],
+                        userRemoteConfigs: [[url: 'git@github.com:infa-sasatapathy/terraform-vpc.git', credentialsId: 'jenkins']]
                     ])
                 }
             }
@@ -71,71 +52,79 @@ pipeline {
                     string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
                     string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
                 ]) {
-                    sh 'terraform init -input=false'
+                    sh '''
+                        terraform init -input=false
+                        echo "Terraform initialisation completed"
+                    '''
                 }
             }
         }
 
         stage('Plan') {
+            when { expression { params.TERRAFORM_ACTION == 'plan' || params.TERRAFORM_ACTION == 'apply' || params.TERRAFORM_ACTION == 'destroy' } }
             steps {
                 script {
-                    def branchName = params['GIT BRANCH'].toString()
-                    def action = params['TERRAFORM ACTION'].toString()
-                    def tfplanFile = "terraform-${branchName}-${System.currentTimeMillis()}.tfplan"
-                    env.TFPLAN_FILE = tfplanFile
+                    def planFile = "terraform-${params.ENVIRONMENT}-$(date +%s).tfplan"
+                    echo "Creating Terraform plan for action: ${params.TERRAFORM_ACTION} in ${params.ENVIRONMENT} branch"
 
-                    if (action == "destroy") {
+                    if (params.TERRAFORM_ACTION == 'destroy') {
                         sh """
-                          terraform plan -destroy -var="environment=${branchName}" -out=${tfplanFile} -input=false
+                            terraform plan -destroy -out=${planFile} -input=false
                         """
                     } else {
                         sh """
-                          terraform plan -var="environment=${branchName}" -out=${tfplanFile} -input=false
+                            terraform plan -out=${planFile} -input=false
                         """
                     }
+
+                    archiveArtifacts artifacts: planFile, allowEmptyArchive: false
+                    env.TF_PLAN_FILE = planFile
                 }
             }
         }
 
         stage('Approvals') {
-            when {
-                anyOf {
-                    expression { params['TERRAFORM ACTION'].toString() == 'apply' }
-                    expression { params['TERRAFORM ACTION'].toString() == 'destroy' }
-                }
-            }
+            when { expression { params.TERRAFORM_ACTION == 'apply' || params.TERRAFORM_ACTION == 'destroy' } }
             steps {
-                script {
-                    def action = params['TERRAFORM ACTION'].toString()
-                    timeout(time: 1, unit: 'HOURS') {
-                        input message: "Approve ${action} on ${params['GIT BRANCH']}?", ok: "Proceed"
-                    }
+                timeout(time: 5, unit: 'MINUTES') {
+                    input message: "Do you want to ${params.TERRAFORM_ACTION} the Terraform changes for branch ${params.GIT_BRANCH}?",
+                          ok: "Proceed with ${params.TERRAFORM_ACTION}"
                 }
             }
         }
 
         stage('Apply') {
-            when {
-                anyOf {
-                    expression { params['TERRAFORM ACTION'].toString() == 'apply' }
-                    expression { params['TERRAFORM ACTION'].toString() == 'destroy' }
-                }
-            }
+            when { expression { params.TERRAFORM_ACTION == 'apply' || params.TERRAFORM_ACTION == 'destroy' } }
             steps {
-                sh "terraform apply -auto-approve ${env.TFPLAN_FILE}"
+                withCredentials([
+                    string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
+                    string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
+                ]) {
+                    script {
+                        echo "Applying Terraform ${params.TERRAFORM_ACTION} for ${params.ENVIRONMENT}"
+                        sh """
+                            terraform apply -auto-approve ${env.TF_PLAN_FILE}
+                        """
+                    }
+                }
             }
         }
 
         stage('Completed') {
             steps {
                 script {
-                    if (currentBuild.currentResult == 'SUCCESS') {
-                        echo "✅ SUCCESS: Terraform ${params['TERRAFORM ACTION']} completed for ${params['GIT BRANCH']}"
-                    } else {
-                        echo "❌ FAILURE: Terraform ${params['TERRAFORM ACTION']} failed for ${params['GIT BRANCH']}"
-                    }
+                    echo "Terraform pipeline for ${params.ENVIRONMENT} completed with action: ${params.TERRAFORM_ACTION}"
                 }
             }
+        }
+    }
+
+    post {
+        success {
+            echo "Pipeline executed successfully!"
+        }
+        failure {
+            echo "Pipeline failed!"
         }
     }
 }
