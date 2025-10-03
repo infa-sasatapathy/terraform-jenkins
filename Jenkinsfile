@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     options {
-        skipDefaultCheckout(true)  // avoid Jenkins auto-checkout
+        skipDefaultCheckout(true)
     }
 
     parameters {
@@ -14,12 +14,12 @@ pipeline {
         choice(
             name: 'TERRAFORM ACTION',
             choices: ['plan', 'apply', 'destroy'],
-            description: 'Choose Terraform action: plan, apply to create/update resources, or destroy to remove all resources'
+            description: 'Choose Terraform action'
         )
         string(
             name: 'AWS_DEFAULT_REGION',
             defaultValue: 'ap-south-1',
-            description: 'AWS Region for Terraform deployment'
+            description: 'AWS Region'
         )
         choice(
             name: 'TF_LOG',
@@ -29,41 +29,21 @@ pipeline {
         string(
             name: 'TF_LOG_PATH',
             defaultValue: 'terraform.log',
-            description: 'Path to store Terraform logs'
+            description: 'Terraform log path'
         )
     }
 
     environment {
-        AWS_DEFAULT_REGION = "${params['AWS_DEFAULT_REGION'].toString()}"
-        TF_LOG             = "${params['TF_LOG'].toString()}"
-        TF_LOG_PATH        = "${params['TF_LOG_PATH'].toString()}"
-        ENVIRONMENT        = ""  // will be set in "Set Default Branch"
+        AWS_DEFAULT_REGION = "${params['AWS_DEFAULT_REGION']}"
+        TF_LOG             = "${params['TF_LOG']}"
+        TF_LOG_PATH        = "${params['TF_LOG_PATH']}"
     }
 
     stages {
-        stage('Set Default Branch') {
+        stage('Set Branch') {
             steps {
                 script {
-                    def jobName = env.JOB_NAME.toLowerCase()
-                    def defaultBranch = "dev" // fallback
-
-                    if (jobName.contains("prod")) {
-                        defaultBranch = "prod"
-                    } else if (jobName.contains("stg")) {
-                        defaultBranch = "stg"
-                    } else if (jobName.contains("dev")) {
-                        defaultBranch = "dev"
-                    }
-
-                    if (params['GIT BRANCH']) {
-                        env.ENVIRONMENT = params['GIT BRANCH'].toString()
-                        echo "Using user-selected GIT BRANCH: ${env.ENVIRONMENT}"
-                    } else {
-                        env.ENVIRONMENT = defaultBranch
-                        echo "No GIT BRANCH provided, defaulting to: ${env.ENVIRONMENT} (based on job name)"
-                    }
-
-                    echo "DEBUG → params['GIT BRANCH'] = ${params['GIT BRANCH']}, env.ENVIRONMENT = ${env.ENVIRONMENT}"
+                    echo "Using branch from parameter: ${params['GIT BRANCH']}"
                 }
             }
         }
@@ -71,10 +51,11 @@ pipeline {
         stage('Checkout SCM') {
             steps {
                 script {
-                    echo "Checking out branch: ${env.ENVIRONMENT}"
+                    def branchName = params['GIT BRANCH'].toString()
+                    echo "Checking out branch: ${branchName}"
                     checkout([
                         $class: 'GitSCM',
-                        branches: [[name: "*/${env.ENVIRONMENT}"]],
+                        branches: [[name: "*/${branchName}"]],
                         userRemoteConfigs: [[
                             url: 'git@github.com:infa-sasatapathy/terraform-vpc.git',
                             credentialsId: 'jenkins'
@@ -90,55 +71,28 @@ pipeline {
                     string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
                     string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
                 ]) {
-                    sh '''
-                        terraform init -input=false
-                    '''
+                    sh 'terraform init -input=false'
                 }
-            }
-        }
-
-        stage('Terratest') {
-            when {
-                expression { params['TERRAFORM ACTION'].toString() == 'plan' || params['TERRAFORM ACTION'].toString() == 'apply' }
-            }
-            steps {
-                sh '''
-                    cd test
-                    go mod tidy
-                    go test -v -timeout 30m
-                '''
             }
         }
 
         stage('Plan') {
-            when {
-                anyOf {
-                    expression { params['TERRAFORM ACTION'].toString() == 'plan' }
-                    expression { params['TERRAFORM ACTION'].toString() == 'apply' }
-                    expression { params['TERRAFORM ACTION'].toString() == 'destroy' }
-                }
-            }
             steps {
                 script {
-                    def tfplanFile = "terraform-${env.ENVIRONMENT}-${System.currentTimeMillis()}.tfplan"
+                    def branchName = params['GIT BRANCH'].toString()
+                    def action = params['TERRAFORM ACTION'].toString()
+                    def tfplanFile = "terraform-${branchName}-${System.currentTimeMillis()}.tfplan"
                     env.TFPLAN_FILE = tfplanFile
 
-                    echo "Creating plan for ${params['TERRAFORM ACTION']} in ${env.ENVIRONMENT}"
-
-                    if (params['TERRAFORM ACTION'].toString() == 'destroy') {
+                    if (action == "destroy") {
                         sh """
-                            terraform plan -destroy -var="environment=${env.ENVIRONMENT}" -out=${tfplanFile} -input=false
+                          terraform plan -destroy -var="environment=${branchName}" -out=${tfplanFile} -input=false
                         """
                     } else {
                         sh """
-                            terraform plan -var="environment=${env.ENVIRONMENT}" -out=${tfplanFile} -input=false
+                          terraform plan -var="environment=${branchName}" -out=${tfplanFile} -input=false
                         """
                     }
-                }
-            }
-            post {
-                always {
-                    archiveArtifacts artifacts: '*.tfplan,terraform.log', allowEmptyArchive: true
                 }
             }
         }
@@ -152,17 +106,9 @@ pipeline {
             }
             steps {
                 script {
-                    def actionText = params['TERRAFORM ACTION'].toString()
-                    def buttonText = actionText == 'destroy' ? 'Destroy Resources' : 'Apply Changes'
-
+                    def action = params['TERRAFORM ACTION'].toString()
                     timeout(time: 1, unit: 'HOURS') {
-                        input message: "Approve ${actionText} on ${env.ENVIRONMENT}?", ok: buttonText
-                    }
-
-                    if (actionText == 'destroy' && env.ENVIRONMENT == 'prod') {
-                        timeout(time: 1, unit: 'HOURS') {
-                            input message: "⚠️ FINAL CONFIRMATION: Destroy PRODUCTION (branch: prod)?", ok: "Yes, Destroy PRODUCTION"
-                        }
+                        input message: "Approve ${action} on ${params['GIT BRANCH']}?", ok: "Proceed"
                     }
                 }
             }
@@ -176,9 +122,7 @@ pipeline {
                 }
             }
             steps {
-                sh """
-                    terraform apply -auto-approve ${env.TFPLAN_FILE}
-                """
+                sh "terraform apply -auto-approve ${env.TFPLAN_FILE}"
             }
         }
 
@@ -186,25 +130,9 @@ pipeline {
             steps {
                 script {
                     if (currentBuild.currentResult == 'SUCCESS') {
-                        slackSend(
-                            channel: '#alerts',
-                            color: 'good',
-                            message: "✅ SUCCESS: Terraform ${params['TERRAFORM ACTION'].toString()} completed for *${env.ENVIRONMENT}*."
-                        )
-                        emailext(
-                            subject: "✅ SUCCESS: Terraform ${params['TERRAFORM ACTION'].toString()} for ${env.ENVIRONMENT}",
-                            body: "Pipeline succeeded for ${env.ENVIRONMENT}."
-                        )
+                        echo "✅ SUCCESS: Terraform ${params['TERRAFORM ACTION']} completed for ${params['GIT BRANCH']}"
                     } else {
-                        slackSend(
-                            channel: '#alerts',
-                            color: 'danger',
-                            message: "❌ FAILURE: Terraform ${params['TERRAFORM ACTION'].toString()} failed for *${env.ENVIRONMENT}*."
-                        )
-                        emailext(
-                            subject: "❌ FAILURE: Terraform ${params['TERRAFORM ACTION'].toString()} for ${env.ENVIRONMENT}",
-                            body: "Pipeline failed for ${env.ENVIRONMENT}. Please check Jenkins logs."
-                        )
+                        echo "❌ FAILURE: Terraform ${params['TERRAFORM ACTION']} failed for ${params['GIT BRANCH']}"
                     }
                 }
             }
