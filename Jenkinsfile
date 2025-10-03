@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     options {
-        skipDefaultCheckout(true)  // avoid the hidden "Declarative: Checkout SCM"
+        skipDefaultCheckout(true)  // avoid Jenkins auto-checkout
     }
 
     parameters {
@@ -34,10 +34,10 @@ pipeline {
     }
 
     environment {
-        AWS_DEFAULT_REGION = "${params['AWS_DEFAULT_REGION']}"
-        TF_LOG             = "${params['TF_LOG']}"
-        TF_LOG_PATH        = "${params['TF_LOG_PATH']}"
-        ENVIRONMENT        = ""  // will be set in Set Default Branch stage
+        AWS_DEFAULT_REGION = "${params['AWS_DEFAULT_REGION'].toString()}"
+        TF_LOG             = "${params['TF_LOG'].toString()}"
+        TF_LOG_PATH        = "${params['TF_LOG_PATH'].toString()}"
+        ENVIRONMENT        = ""  // will be set in "Set Default Branch"
     }
 
     stages {
@@ -45,7 +45,7 @@ pipeline {
             steps {
                 script {
                     def jobName = env.JOB_NAME.toLowerCase()
-                    def defaultBranch = "dev" // fallback branch
+                    def defaultBranch = "dev" // fallback
 
                     if (jobName.contains("prod")) {
                         defaultBranch = "prod"
@@ -56,7 +56,7 @@ pipeline {
                     }
 
                     if (params['GIT BRANCH']) {
-                        env.ENVIRONMENT = params['GIT BRANCH']
+                        env.ENVIRONMENT = params['GIT BRANCH'].toString()
                         echo "Using user-selected GIT BRANCH: ${env.ENVIRONMENT}"
                     } else {
                         env.ENVIRONMENT = defaultBranch
@@ -77,7 +77,7 @@ pipeline {
                         branches: [[name: "*/${env.ENVIRONMENT}"]],
                         userRemoteConfigs: [[
                             url: 'git@github.com:infa-sasatapathy/terraform-vpc.git',
-                            credentialsId: 'jenkins'
+                            credentialsId: 'github-ssh-key'
                         ]]
                     ])
                 }
@@ -99,7 +99,7 @@ pipeline {
 
         stage('Terratest') {
             when {
-                expression { params['TERRAFORM ACTION'] == 'plan' || params['TERRAFORM ACTION'] == 'apply' }
+                expression { params['TERRAFORM ACTION'].toString() == 'plan' || params['TERRAFORM ACTION'].toString() == 'apply' }
             }
             steps {
                 sh '''
@@ -113,9 +113,9 @@ pipeline {
         stage('Plan') {
             when {
                 anyOf {
-                    expression { params['TERRAFORM ACTION'] == 'plan' }
-                    expression { params['TERRAFORM ACTION'] == 'apply' }
-                    expression { params['TERRAFORM ACTION'] == 'destroy' }
+                    expression { params['TERRAFORM ACTION'].toString() == 'plan' }
+                    expression { params['TERRAFORM ACTION'].toString() == 'apply' }
+                    expression { params['TERRAFORM ACTION'].toString() == 'destroy' }
                 }
             }
             steps {
@@ -125,7 +125,7 @@ pipeline {
 
                     echo "Creating plan for ${params['TERRAFORM ACTION']} in ${env.ENVIRONMENT}"
 
-                    if (params['TERRAFORM ACTION'] == 'destroy') {
+                    if (params['TERRAFORM ACTION'].toString() == 'destroy') {
                         sh """
                             terraform plan -destroy -var="environment=${env.ENVIRONMENT}" -out=${tfplanFile} -input=false
                         """
@@ -146,20 +146,20 @@ pipeline {
         stage('Approvals') {
             when {
                 anyOf {
-                    expression { params['TERRAFORM ACTION'] == 'apply' }
-                    expression { params['TERRAFORM ACTION'] == 'destroy' }
+                    expression { params['TERRAFORM ACTION'].toString() == 'apply' }
+                    expression { params['TERRAFORM ACTION'].toString() == 'destroy' }
                 }
             }
             steps {
                 script {
-                    def actionText = params['TERRAFORM ACTION']
+                    def actionText = params['TERRAFORM ACTION'].toString()
                     def buttonText = actionText == 'destroy' ? 'Destroy Resources' : 'Apply Changes'
 
                     timeout(time: 1, unit: 'HOURS') {
                         input message: "Approve ${actionText} on ${env.ENVIRONMENT}?", ok: buttonText
                     }
 
-                    if (params['TERRAFORM ACTION'] == 'destroy' && env.ENVIRONMENT == 'prod') {
+                    if (actionText == 'destroy' && env.ENVIRONMENT == 'prod') {
                         timeout(time: 1, unit: 'HOURS') {
                             input message: "⚠️ FINAL CONFIRMATION: Destroy PRODUCTION (branch: prod)?", ok: "Yes, Destroy PRODUCTION"
                         }
@@ -171,8 +171,8 @@ pipeline {
         stage('Apply') {
             when {
                 anyOf {
-                    expression { params['TERRAFORM ACTION'] == 'apply' }
-                    expression { params['TERRAFORM ACTION'] == 'destroy' }
+                    expression { params['TERRAFORM ACTION'].toString() == 'apply' }
+                    expression { params['TERRAFORM ACTION'].toString() == 'destroy' }
                 }
             }
             steps {
@@ -189,20 +189,20 @@ pipeline {
                         slackSend(
                             channel: '#alerts',
                             color: 'good',
-                            message: "✅ SUCCESS: Terraform ${params['TERRAFORM ACTION']} completed for *${env.ENVIRONMENT}*."
+                            message: "✅ SUCCESS: Terraform ${params['TERRAFORM ACTION'].toString()} completed for *${env.ENVIRONMENT}*."
                         )
                         emailext(
-                            subject: "✅ SUCCESS: Terraform ${params['TERRAFORM ACTION']} for ${env.ENVIRONMENT}",
+                            subject: "✅ SUCCESS: Terraform ${params['TERRAFORM ACTION'].toString()} for ${env.ENVIRONMENT}",
                             body: "Pipeline succeeded for ${env.ENVIRONMENT}."
                         )
                     } else {
                         slackSend(
                             channel: '#alerts',
                             color: 'danger',
-                            message: "❌ FAILURE: Terraform ${params['TERRAFORM ACTION']} failed for *${env.ENVIRONMENT}*."
+                            message: "❌ FAILURE: Terraform ${params['TERRAFORM ACTION'].toString()} failed for *${env.ENVIRONMENT}*."
                         )
                         emailext(
-                            subject: "❌ FAILURE: Terraform ${params['TERRAFORM ACTION']} for ${env.ENVIRONMENT}",
+                            subject: "❌ FAILURE: Terraform ${params['TERRAFORM ACTION'].toString()} for ${env.ENVIRONMENT}",
                             body: "Pipeline failed for ${env.ENVIRONMENT}. Please check Jenkins logs."
                         )
                     }
