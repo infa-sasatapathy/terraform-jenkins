@@ -21,18 +21,21 @@ pipeline {
 
     environment {
         AWS_DEFAULT_REGION = "${params.AWS_DEFAULT_REGION}"
-        ENVIRONMENT        = "${params.GIT_BRANCH}"  // must be referenced as env.ENVIRONMENT later
+        ENVIRONMENT        = "${params.GIT_BRANCH}"
     }
 
     stages {
         stage('Checkout') {
             steps {
-                checkout([
-                    $class: 'GitSCM',
-                    branches: [[name: "*/${params.GIT_BRANCH}"]],
-                    userRemoteConfigs: [[url: 'git@github.com:infa-sasatapathy/terraform-vpc.git', credentialsId: 'jenkins']]
-                ])
-                echo "Code checked out successfully for branch: ${params.GIT_BRANCH}"
+                script {
+                    echo "Checking out branch: ${params.GIT_BRANCH}"
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: "*/${params.GIT_BRANCH}"]],
+                        userRemoteConfigs: [[url: 'git@github.com:infa-sasatapathy/terraform-vpc.git', credentialsId: 'jenkins']]
+                    ])
+                    echo "Code checked out successfully for branch: ${params.GIT_BRANCH}"
+                }
             }
         }
 
@@ -56,12 +59,22 @@ pipeline {
             steps {
                 script {
                     def planFile = "terraform-${env.ENVIRONMENT}-$(date +%s).tfplan"
-                    echo "Creating Terraform plan for action: ${params.TERRAFORM_ACTION} in ${env.ENVIRONMENT}"
+                    def tfvarsFile = "${env.ENVIRONMENT}.tfvars"
+
+                    echo "Creating Terraform plan for ${env.ENVIRONMENT} using ${tfvarsFile}"
 
                     if (params.TERRAFORM_ACTION == 'destroy') {
-                        sh "terraform plan -destroy -out=${planFile} -input=false"
+                        sh """
+                            terraform plan -destroy \
+                                -var-file=${tfvarsFile} \
+                                -out=${planFile} -input=false
+                        """
                     } else {
-                        sh "terraform plan -out=${planFile} -input=false"
+                        sh """
+                            terraform plan \
+                                -var-file=${tfvarsFile} \
+                                -out=${planFile} -input=false
+                        """
                     }
 
                     archiveArtifacts artifacts: planFile, allowEmptyArchive: false
@@ -74,7 +87,7 @@ pipeline {
             when { expression { params.TERRAFORM_ACTION == 'apply' || params.TERRAFORM_ACTION == 'destroy' } }
             steps {
                 timeout(time: 5, unit: 'MINUTES') {
-                    input message: "Do you want to ${params.TERRAFORM_ACTION} the Terraform changes for branch ${env.ENVIRONMENT}?",
+                    input message: "Do you want to ${params.TERRAFORM_ACTION} the Terraform changes for ${env.ENVIRONMENT}?",
                           ok: "Proceed with ${params.TERRAFORM_ACTION}"
                 }
             }
@@ -88,7 +101,9 @@ pipeline {
                     string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
                 ]) {
                     echo "Applying Terraform ${params.TERRAFORM_ACTION} for ${env.ENVIRONMENT}"
-                    sh "terraform apply -auto-approve ${env.TF_PLAN_FILE}"
+                    sh """
+                        terraform apply -var-file=${env.ENVIRONMENT}.tfvars -auto-approve ${env.TF_PLAN_FILE}
+                    """
                 }
             }
         }
@@ -102,10 +117,10 @@ pipeline {
 
     post {
         success {
-            echo "Pipeline executed successfully!"
+            echo "✅ Pipeline executed successfully for ${env.ENVIRONMENT}!"
         }
         failure {
-            echo "Pipeline failed!"
+            echo "❌ Pipeline failed for ${env.ENVIRONMENT}!"
         }
     }
 }
