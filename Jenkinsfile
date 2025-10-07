@@ -33,7 +33,7 @@ pipeline {
                     dir('infra') {  // ✅ clone into subfolder
                         checkout([
                             $class: 'GitSCM',
-                            branches: [[name: "*/main"]],
+                            branches: [[name: "*/master"]],
                             userRemoteConfigs: [[
                                 url: 'git@github.com:infa-sasatapathy/terraform-vpc.git',
                                 credentialsId: 'jenkins'
