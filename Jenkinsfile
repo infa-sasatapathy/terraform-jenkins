@@ -22,7 +22,7 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                checkout scm
+                checkout scmGit(branches: [[name: '*/main']], extensions: [], userRemoteConfigs: [[credentialsId: 'jenkins', url: 'git@github.com:infa-sasatapathy/terraform-jenkins.git']])
                 echo 'Code checked out successfully'
         }
 
