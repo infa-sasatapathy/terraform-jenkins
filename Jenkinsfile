@@ -69,6 +69,24 @@ pipeline {
             }
         }
 
+        stage('Init') {
+            steps {
+            dir("${env.TERRAFORM_DIR}") {
+                withCredentials([
+                string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
+                string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
+                ]) {
+                echo "⚙️ Initializing Terraform..."
+                sh '''
+                    terraform init -reconfigure
+                    echo "Terraform initialization completed successfully."
+                '''
+                }
+            }
+            }
+        }
+
+
         stage('Validate & Fmt') {
             steps {
                 dir("${env.TERRAFORM_DIR}") {
@@ -78,23 +96,6 @@ pipeline {
                         terraform fmt -recursive
                         terraform validate
                     '''
-                }
-            }
-        }
-
-        stage('Init') {
-            steps {
-                dir("${env.TERRAFORM_DIR}") {
-                    withCredentials([
-                        string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
-                        string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
-                    ]) {
-                        echo "⚙️ Initializing Terraform..."
-                        sh '''
-                            terraform init -reconfigure
-                            echo "Terraform initialization completed successfully."
-                        '''
-                    }
                 }
             }
         }
