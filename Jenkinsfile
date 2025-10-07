@@ -5,17 +5,17 @@ pipeline {
         choice(
             name: 'ENVIRONMENT',
             choices: ['dev', 'stg', 'prod'],
-            description: 'Select the environment to deploy/destroy (chooses correct .tfvars file automatically)'
+            description: 'Select the environment (uses corresponding .tfvars file)'
         )
         choice(
             name: 'TERRAFORM_ACTION',
             choices: ['plan', 'apply', 'destroy'],
-            description: 'Choose Terraform action: plan, apply or destroy'
+            description: 'Choose Terraform action'
         )
         string(
             name: 'AWS_DEFAULT_REGION',
             defaultValue: 'us-east-1',
-            description: 'AWS Region for Terraform deployment'
+            description: 'AWS region for Terraform deployment'
         )
     }
 
@@ -26,26 +26,28 @@ pipeline {
 
     stages {
 
-        stage('Checkout') {
+        stage('Checkout Terraform Repo') {
             steps {
                 script {
-                    echo "📦 Checking out Terraform repo..."
-                    checkout([
-                        $class: 'GitSCM',
-                        branches: [[name: "*/main"]],
-                        userRemoteConfigs: [[
-                            url: 'git@github.com:infa-sasatapathy/terraform-vpc.git',
-                            credentialsId: 'jenkins'
-                        ]]
-                    ])
-                    echo "✅ Code checked out successfully"
+                    echo "📦 Checking out Terraform repository..."
+                    dir('infra') {  // ✅ clone into subfolder
+                        checkout([
+                            $class: 'GitSCM',
+                            branches: [[name: "*/main"]],
+                            userRemoteConfigs: [[
+                                url: 'git@github.com:infa-sasatapathy/terraform-vpc.git',
+                                credentialsId: 'jenkins'
+                            ]]
+                        ])
+                    }
+                    echo "✅ Terraform code checked out successfully into ./infra/"
                 }
             }
         }
 
         stage('Validate & Fmt') {
             steps {
-                dir('terraform-vpc') {
+                dir('infra') {
                     echo "🔍 Running terraform fmt & validate checks"
                     sh '''
                         terraform fmt -check
@@ -57,7 +59,7 @@ pipeline {
 
         stage('Init') {
             steps {
-                dir('terraform-vpc') {
+                dir('infra') {
                     withCredentials([
                         string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
                         string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
@@ -77,7 +79,7 @@ pipeline {
                 expression { params.TERRAFORM_ACTION in ['plan', 'apply', 'destroy'] }
             }
             steps {
-                dir('terraform-vpc') {
+                dir('infra') {
                     script {
                         def timestamp = System.currentTimeMillis()
                         def planFile = "terraform-${env.ENVIRONMENT}-${timestamp}.tfplan"
@@ -105,8 +107,7 @@ pipeline {
                 }
             }
         }
-
-        stage('Terratest') {
+stage('Terratest') {
             when {
                 expression { params['TERRAFORM ACTION'] == 'plan' || params['TERRAFORM ACTION'] == 'apply' }
             }
@@ -132,15 +133,14 @@ pipeline {
                 }
             }
         }
-
         stage('Approvals') {
             when {
                 expression { params.TERRAFORM_ACTION in ['apply', 'destroy'] }
             }
             steps {
                 timeout(time: 5, unit: 'MINUTES') {
-                    input message: "🟡 Do you want to ${params.TERRAFORM_ACTION} Terraform changes for ${env.ENVIRONMENT}?",
-                          ok: "✅ Proceed with ${params.TERRAFORM_ACTION}"
+                    input message: "🟡 Approve Terraform ${params.TERRAFORM_ACTION} for ${env.ENVIRONMENT}?",
+                          ok: "✅ Proceed"
                 }
             }
         }
@@ -150,7 +150,7 @@ pipeline {
                 expression { params.TERRAFORM_ACTION in ['apply', 'destroy'] }
             }
             steps {
-                dir('terraform-vpc') {
+                dir('infra') {
                     withCredentials([
                         string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
                         string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
@@ -166,20 +166,20 @@ pipeline {
 
         stage('Completed') {
             steps {
-                echo "🎉 Terraform pipeline for ${env.ENVIRONMENT} completed successfully with action: ${params.TERRAFORM_ACTION}"
+                echo "🎉 Terraform ${params.TERRAFORM_ACTION} completed successfully for ${env.ENVIRONMENT}"
             }
         }
     }
 
     post {
         success {
-            echo "✅ Pipeline executed successfully for ${env.ENVIRONMENT}!"
+            echo "✅ Pipeline executed successfully for ${env.ENVIRONMENT}"
         }
         failure {
-            echo "❌ Pipeline failed for ${env.ENVIRONMENT}!"
+            echo "❌ Pipeline failed for ${env.ENVIRONMENT}"
         }
         always {
-            echo "📘 Jenkins Terraform pipeline run finished."
+            echo "📘 Jenkins Terraform pipeline finished"
         }
     }
 }
