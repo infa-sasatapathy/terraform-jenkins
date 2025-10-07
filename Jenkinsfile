@@ -47,15 +47,17 @@ pipeline {
 
         stage('Validate & Fmt') {
             steps {
-                dir('infra') {
+                dir(env.TERRAFORM_DIR) {
                     echo "🔍 Running terraform fmt & validate checks"
                     sh '''
-                        terraform fmt -check
+                        # Auto-format everything (fixes exit code 3 issue)
+                        terraform fmt -recursive
                         terraform validate
-                    '''
-                }
-            }
+                      '''
         }
+    }
+}
+
 
         stage('Init') {
             steps {
