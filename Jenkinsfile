@@ -39,7 +39,7 @@ pipeline {
                         dir(terraformDir) {
                             checkout([
                                 $class: 'GitSCM',
-                                branches: [[name: "*/main"]],
+                                branches: [[name: "*/master"]],
                                 userRemoteConfigs: [[
                                     url: terraformRepo,
                                     credentialsId: 'jenkins'
