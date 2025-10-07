@@ -25,17 +25,31 @@ pipeline {
     }
 
     stages {
+
         stage('Checkout') {
             steps {
                 script {
-                    echo "Checking out branch: ${params.GIT_BRANCH}"
+                    echo "📦 Checking out branch: ${params.GIT_BRANCH}"
                     checkout([
                         $class: 'GitSCM',
                         branches: [[name: "*/${params.GIT_BRANCH}"]],
-                        userRemoteConfigs: [[url: 'git@github.com:infa-sasatapathy/terraform-vpc.git', credentialsId: 'jenkins']]
+                        userRemoteConfigs: [[
+                            url: 'git@github.com:infa-sasatapathy/terraform-vpc.git',
+                            credentialsId: 'jenkins'
+                        ]]
                     ])
-                    echo "Code checked out successfully for branch: ${params.GIT_BRANCH}"
+                    echo "✅ Code checked out successfully for branch: ${params.GIT_BRANCH}"
                 }
+            }
+        }
+
+        stage('Validate & Fmt') {
+            steps {
+                echo "🔍 Running terraform fmt & validate checks"
+                sh '''
+                    terraform fmt -check
+                    terraform validate
+                '''
             }
         }
 
@@ -45,25 +59,26 @@ pipeline {
                     string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
                     string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
                 ]) {
-                    echo "Initializing Terraform..."
+                    echo "⚙️ Initializing Terraform..."
                     sh '''
                         terraform init -reconfigure
-                        echo "Terraform initialization completed"
+                        echo "Terraform initialization completed successfully."
                     '''
                 }
             }
         }
 
         stage('Plan') {
-            when { expression { params.TERRAFORM_ACTION in ['plan', 'apply', 'destroy'] } }
+            when {
+                expression { params.TERRAFORM_ACTION in ['plan', 'apply', 'destroy'] }
+            }
             steps {
                 script {
-                    // ✅ Generate timestamp safely in Groovy, not bash
                     def timestamp = System.currentTimeMillis()
                     def planFile = "terraform-${env.ENVIRONMENT}-${timestamp}.tfplan"
                     def tfvarsFile = "${env.ENVIRONMENT}.tfvars"
 
-                    echo "Creating Terraform plan for ${env.ENVIRONMENT} using ${tfvarsFile}"
+                    echo "🧩 Running Terraform plan for ${env.ENVIRONMENT} using ${tfvarsFile}"
 
                     if (params.TERRAFORM_ACTION == 'destroy') {
                         sh """
@@ -86,13 +101,50 @@ pipeline {
         }
 
         stage('Approvals') {
-            when { expression { params.TERRAFORM_ACTION in ['apply', 'destroy'] } }
+            when {
+                expression { params.TERRAFORM_ACTION in ['apply', 'destroy'] }
+            }
             steps {
                 timeout(time: 5, unit: 'MINUTES') {
-                    input message: "Do you want to ${params.TERRAFORM_ACTION} the Terraform changes for ${env.ENVIRONMENT}?",
-                          ok: "Proceed with ${params.TERRAFORM_ACTION}"
+                    input message: "🟡 Do you want to ${params.TERRAFORM_ACTION} Terraform changes for ${env.ENVIRONMENT}?",
+                          ok: "✅ Proceed with ${params.TERRAFORM_ACTION}"
                 }
             }
         }
 
-        stage('Apply')
+        stage('Apply') {
+            when {
+                expression { params.TERRAFORM_ACTION in ['apply', 'destroy'] }
+            }
+            steps {
+                withCredentials([
+                    string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
+                    string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
+                ]) {
+                    echo "🚀 Applying Terraform ${params.TERRAFORM_ACTION} for ${env.ENVIRONMENT}"
+                    sh """
+                        terraform apply -var-file=${env.ENVIRONMENT}.tfvars -auto-approve ${env.TF_PLAN_FILE}
+                    """
+                }
+            }
+        }
+
+        stage('Completed') {
+            steps {
+                echo "🎉 Terraform pipeline for ${env.ENVIRONMENT} completed successfully with action: ${params.TERRAFORM_ACTION}"
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Pipeline executed successfully for ${env.ENVIRONMENT}!"
+        }
+        failure {
+            echo "❌ Pipeline failed for ${env.ENVIRONMENT}!"
+        }
+        always {
+            echo "📘 Jenkins Terraform pipeline run finished."
+        }
+    }
+}
