@@ -3,11 +3,6 @@ pipeline {
 
     parameters {
         choice(
-            name: 'GIT_BRANCH',
-            choices: ['dev', 'stg', 'prod'],
-            description: 'Select the Git branch (environment) to deploy/destroy'
-        )
-        choice(
             name: 'TERRAFORM_ACTION',
             choices: ['plan', 'apply', 'destroy'],
             description: 'Choose Terraform action: plan, apply or destroy'
@@ -27,16 +22,8 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                script {
-                    echo "Checking out branch: ${params.GIT_BRANCH}"
-                    checkout([
-                        $class: 'GitSCM',
-                        branches: [[name: "*/${params.GIT_BRANCH}"]],
-                        userRemoteConfigs: [[url: 'git@github.com:infa-sasatapathy/terraform-vpc.git', credentialsId: 'jenkins']]
-                    ])
-                    echo "Code checked out successfully for branch: ${params.GIT_BRANCH}"
-                }
-            }
+                checkout scm
+                echo 'Code checked out successfully'
         }
 
         stage('Init') {
