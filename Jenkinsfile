@@ -3,9 +3,9 @@ pipeline {
 
     parameters {
         choice(
-            name: 'GIT_BRANCH',
+            name: 'ENVIRONMENT',
             choices: ['dev', 'stg', 'prod'],
-            description: 'Select the Git branch (environment) to deploy/destroy'
+            description: 'Select the environment to deploy/destroy (chooses correct .tfvars file automatically)'
         )
         choice(
             name: 'TERRAFORM_ACTION',
@@ -21,7 +21,7 @@ pipeline {
 
     environment {
         AWS_DEFAULT_REGION = "${params.AWS_DEFAULT_REGION}"
-        ENVIRONMENT        = "${params.GIT_BRANCH}"
+        ENVIRONMENT        = "${params.ENVIRONMENT}"
     }
 
     stages {
@@ -29,41 +29,45 @@ pipeline {
         stage('Checkout') {
             steps {
                 script {
-                    echo "📦 Checking out branch: ${params.GIT_BRANCH}"
+                    echo "📦 Checking out Terraform repo..."
                     checkout([
                         $class: 'GitSCM',
-                        branches: [[name: "*/${params.GIT_BRANCH}"]],
+                        branches: [[name: "*/main"]],
                         userRemoteConfigs: [[
                             url: 'git@github.com:infa-sasatapathy/terraform-vpc.git',
                             credentialsId: 'jenkins'
                         ]]
                     ])
-                    echo "✅ Code checked out successfully for branch: ${params.GIT_BRANCH}"
+                    echo "✅ Code checked out successfully"
                 }
             }
         }
 
         stage('Validate & Fmt') {
             steps {
-                echo "🔍 Running terraform fmt & validate checks"
-                sh '''
-                    terraform fmt -check
-                    terraform validate
-                '''
+                dir('terraform-vpc') {
+                    echo "🔍 Running terraform fmt & validate checks"
+                    sh '''
+                        terraform fmt -check
+                        terraform validate
+                    '''
+                }
             }
         }
 
         stage('Init') {
             steps {
-                withCredentials([
-                    string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
-                    string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
-                ]) {
-                    echo "⚙️ Initializing Terraform..."
-                    sh '''
-                        terraform init -reconfigure
-                        echo "Terraform initialization completed successfully."
-                    '''
+                dir('terraform-vpc') {
+                    withCredentials([
+                        string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
+                        string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
+                    ]) {
+                        echo "⚙️ Initializing Terraform..."
+                        sh '''
+                            terraform init -reconfigure
+                            echo "Terraform initialization completed successfully."
+                        '''
+                    }
                 }
             }
         }
@@ -73,29 +77,31 @@ pipeline {
                 expression { params.TERRAFORM_ACTION in ['plan', 'apply', 'destroy'] }
             }
             steps {
-                script {
-                    def timestamp = System.currentTimeMillis()
-                    def planFile = "terraform-${env.ENVIRONMENT}-${timestamp}.tfplan"
-                    def tfvarsFile = "${env.ENVIRONMENT}.tfvars"
+                dir('terraform-vpc') {
+                    script {
+                        def timestamp = System.currentTimeMillis()
+                        def planFile = "terraform-${env.ENVIRONMENT}-${timestamp}.tfplan"
+                        def tfvarsFile = "${env.ENVIRONMENT}.tfvars"
 
-                    echo "🧩 Running Terraform plan for ${env.ENVIRONMENT} using ${tfvarsFile}"
+                        echo "🧩 Running Terraform plan for ${env.ENVIRONMENT} using ${tfvarsFile}"
 
-                    if (params.TERRAFORM_ACTION == 'destroy') {
-                        sh """
-                            terraform plan -destroy \
-                                -var-file=${tfvarsFile} \
-                                -out=${planFile} -input=false
-                        """
-                    } else {
-                        sh """
-                            terraform plan \
-                                -var-file=${tfvarsFile} \
-                                -out=${planFile} -input=false
-                        """
+                        if (params.TERRAFORM_ACTION == 'destroy') {
+                            sh """
+                                terraform plan -destroy \
+                                    -var-file=${tfvarsFile} \
+                                    -out=${planFile} -input=false
+                            """
+                        } else {
+                            sh """
+                                terraform plan \
+                                    -var-file=${tfvarsFile} \
+                                    -out=${planFile} -input=false
+                            """
+                        }
+
+                        archiveArtifacts artifacts: planFile, allowEmptyArchive: false
+                        env.TF_PLAN_FILE = planFile
                     }
-
-                    archiveArtifacts artifacts: planFile, allowEmptyArchive: false
-                    env.TF_PLAN_FILE = planFile
                 }
             }
         }
@@ -117,14 +123,16 @@ pipeline {
                 expression { params.TERRAFORM_ACTION in ['apply', 'destroy'] }
             }
             steps {
-                withCredentials([
-                    string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
-                    string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
-                ]) {
-                    echo "🚀 Applying Terraform ${params.TERRAFORM_ACTION} for ${env.ENVIRONMENT}"
-                    sh """
-                        terraform apply -var-file=${env.ENVIRONMENT}.tfvars -auto-approve ${env.TF_PLAN_FILE}
-                    """
+                dir('terraform-vpc') {
+                    withCredentials([
+                        string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
+                        string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
+                    ]) {
+                        echo "🚀 Applying Terraform ${params.TERRAFORM_ACTION} for ${env.ENVIRONMENT}"
+                        sh """
+                            terraform apply -var-file=${env.ENVIRONMENT}.tfvars -auto-approve ${env.TF_PLAN_FILE}
+                        """
+                    }
                 }
             }
         }
