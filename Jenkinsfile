@@ -106,6 +106,33 @@ pipeline {
             }
         }
 
+        stage('Terratest') {
+            when {
+                expression { params['TERRAFORM ACTION'] == 'plan' || params['TERRAFORM ACTION'] == 'apply' }
+            }
+            steps {
+                script {
+                    echo "Running Terratest for Terraform code in branch: ${params['GIT BRANCH']}"
+
+                    // Assumes you have Go and Terratest installed on the Jenkins agent
+                    // and your tests are inside the "test/" directory
+                    sh '''
+                        cd test
+                        go mod tidy
+                        go test -v -timeout 30m
+                    '''
+                }
+            }
+            post {
+                always {
+                    junit 'test/**/TEST-*.xml'  // if using gotestsum for JUnit XML output
+                }
+                failure {
+                    error("Terratest failed! Fix tests before proceeding.")
+                }
+            }
+        }
+
         stage('Approvals') {
             when {
                 expression { params.TERRAFORM_ACTION in ['apply', 'destroy'] }
