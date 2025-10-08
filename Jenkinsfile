@@ -18,9 +18,9 @@ pipeline {
             description: 'AWS region for Terraform deployment'
         )
         string(
-            name: 'TERRAFORM_REPO',
-            defaultValue: 'git@github.com:infa-sasatapathy/terraform-vpc.git',
-            description: 'Git repository URL for Terraform code'
+            name: 'TERRAFORM_REPO_NAME',
+            defaultValue: 'terraform-vpc',
+            description: 'Terraform repository name (e.g., terraform-vpc)'
         )
         string(
             name: 'TERRAFORM_BRANCH',
@@ -35,10 +35,10 @@ pipeline {
     }
 
     environment {
+        GITHUB_USER        = "infa-sasatapathy" // 🔧 You can change this to your org name if needed
         AWS_DEFAULT_REGION = "${params.AWS_DEFAULT_REGION ?: 'us-east-1'}"
         ENVIRONMENT        = "${params.ENVIRONMENT ?: 'dev'}"
         TERRAFORM_ACTION   = "${params.TERRAFORM_ACTION ?: 'plan'}"
-        TERRAFORM_REPO     = "${params.TERRAFORM_REPO}"
         TERRAFORM_BRANCH   = "${params.TERRAFORM_BRANCH}"
         TERRAFORM_DIR      = "${params.TERRAFORM_DIR}"
     }
@@ -48,14 +48,17 @@ pipeline {
         stage('Checkout Terraform Repo') {
             steps {
                 script {
-                    echo "📦 Checking out Terraform repository: ${params.TERRAFORM_REPO} (branch: ${params.TERRAFORM_BRANCH})"
+                    // Build full repo URL automatically
+                    def terraformRepo = "git@github.com:${env.GITHUB_USER}/${params.TERRAFORM_REPO_NAME}.git"
+
+                    echo "📦 Checking out Terraform repository: ${terraformRepo} (branch: ${params.TERRAFORM_BRANCH})"
 
                     dir("${params.TERRAFORM_DIR}") {
                         checkout([
                             $class: 'GitSCM',
                             branches: [[name: "*/${params.TERRAFORM_BRANCH}"]],
                             userRemoteConfigs: [[
-                                url: params.TERRAFORM_REPO,
+                                url: terraformRepo,
                                 credentialsId: 'jenkins'
                             ]]
                         ])
@@ -123,7 +126,7 @@ pipeline {
                         archiveArtifacts artifacts: planFile, allowEmptyArchive: false
                         env.TF_PLAN_FILE = planFile
 
-                        // Keep only last 3 plans
+                        // Keep only last 3 plan files
                         echo "🧹 Cleaning up old Terraform plan files..."
                         sh """
                             ls -t terraform-*.tfplan | tail -n +4 | xargs -r rm -f || true
@@ -171,81 +174,4 @@ pipeline {
 
         stage('Approval') {
             when {
-                expression { params.TERRAFORM_ACTION in ['apply', 'destroy'] }
-            }
-            steps {
-                timeout(time: 10, unit: 'MINUTES') {
-                    input message: "🟡 Approve Terraform ${params.TERRAFORM_ACTION.toUpperCase()} for ${params.ENVIRONMENT}?",
-                          ok: "✅ Proceed"
-                }
-            }
-        }
-
-        stage('Apply Infrastructure') {
-            when {
-                expression { params.TERRAFORM_ACTION == 'apply' }
-            }
-            steps {
-                dir("${params.TERRAFORM_DIR}") {
-                    withCredentials([
-                        string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
-                        string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
-                    ]) {
-                        echo "🚀 Applying Terraform for ${params.ENVIRONMENT} in ${params.AWS_DEFAULT_REGION}"
-                        sh """
-                            set -e
-                            export AWS_DEFAULT_REGION=${params.AWS_DEFAULT_REGION}
-                            terraform apply -auto-approve -var-file=${params.ENVIRONMENT}.tfvars -var="region=${params.AWS_DEFAULT_REGION}" ${env.TF_PLAN_FILE}
-                        """
-                    }
-                }
-            }
-        }
-
-        stage('Destroy Infrastructure') {
-            when {
-                expression { params.TERRAFORM_ACTION == 'destroy' }
-            }
-            steps {
-                dir("${params.TERRAFORM_DIR}") {
-                    withCredentials([
-                        string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
-                        string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
-                    ]) {
-                        echo "💣 Destroying Terraform resources for ${params.ENVIRONMENT} in ${params.AWS_DEFAULT_REGION}"
-                        sh """
-                            set -e
-                            export AWS_DEFAULT_REGION=${params.AWS_DEFAULT_REGION}
-                            terraform destroy -auto-approve -var-file=${params.ENVIRONMENT}.tfvars -var="region=${params.AWS_DEFAULT_REGION}"
-                        """
-                    }
-                }
-            }
-        }
-
-        stage('Completed') {
-            steps {
-                echo """
-🎉 Terraform ${params.TERRAFORM_ACTION.toUpperCase()} completed successfully!
-📦 Environment : ${params.ENVIRONMENT}
-🌍 AWS Region   : ${params.AWS_DEFAULT_REGION}
-🪣 Repo         : ${params.TERRAFORM_REPO}
-🌿 Branch       : ${params.TERRAFORM_BRANCH}
-📁 Directory    : ${params.TERRAFORM_DIR}
-                """
-            }
-        }
-    }
-
-    post {
-        success {
-            echo "✅ Pipeline executed successfully for ${params.ENVIRONMENT} (${params.AWS_DEFAULT_REGION})"
-        }
-        failure {
-            echo "❌ Pipeline failed for ${params.ENVIRONMENT} (${params.AWS_DEFAULT_REGION})"
-        }
-        always {
-            echo "📘 Jenkins Terraform pipeline finished"
-        }
-    }
-}
+                expression { params.TERRAFORM_ACTION in ['apply', 'destroy]()_
