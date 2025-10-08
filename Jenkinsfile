@@ -128,6 +128,42 @@ pipeline {
             }
         }
 
+        stage('Terratest') {
+            when {
+                expression { params.TERRAFORM_ACTION == 'plan' }
+            }
+            steps {
+                dir("${env.TERRAFORM_DIR}") {
+                    echo "🧪 Running Terratest for ${env.ENVIRONMENT}"
+                    script {
+                        def terratestResult = sh(
+                            script: """
+                                set -e
+                                if [ -d "tests" ]; then
+                                    echo "Running Terratest Go tests..."
+                                    cd tests
+                                    if [ ! -f "go.mod" ]; then
+                                        go mod init terratest
+                                        go get github.com/gruntwork-io/terratest/modules/terraform
+                                    fi
+                                    go test -v ./...
+                                else
+                                    echo "ℹ️ No Terratest directory found, skipping..."
+                                    exit 0
+                                fi
+                            """,
+                            returnStatus: true
+                        )
+                        if (terratestResult != 0) {
+                            error("❌ Terratest failed — stopping pipeline.")
+                        } else {
+                            echo "✅ Terratest passed successfully."
+                        }
+                    }
+                }
+            }
+        }
+
         stage('Approval') {
             when {
                 expression { params.TERRAFORM_ACTION in ['apply', 'destroy'] }
