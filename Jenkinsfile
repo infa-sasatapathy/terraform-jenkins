@@ -5,7 +5,7 @@ pipeline {
         choice(
             name: 'ENVIRONMENT',
             choices: ['dev', 'stg', 'prod'],
-            description: 'Select the environment (automatically picks matching .tfvars)'
+            description: 'Select the environment
         )
         choice(
             name: 'TERRAFORM_ACTION',
@@ -24,7 +24,7 @@ pipeline {
         ENVIRONMENT        = "${params.ENVIRONMENT}"
     }
 
-    stages {   // ✅ All stages enclosed here
+    stages {
 
         stage('Checkout Terraform Repo') {
             steps {
