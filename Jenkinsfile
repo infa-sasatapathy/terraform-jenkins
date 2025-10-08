@@ -117,30 +117,43 @@ pipeline {
             }
         }
 
-        stage('Terratest') {
-            when {
-                expression { params.TERRAFORM_ACTION == 'plan' }
-            }
-            steps {
-                dir("${env.TERRAFORM_DIR}") {
-                    echo "🧪 Running Terratest for ${env.ENVIRONMENT}"
-                    sh '''
-                        if [ -d "tests" ]; then
-                            echo "Running Terratest Go tests..."
-                            cd tests
-                            if [ ! -f "go.mod" ]; then
-                                echo "⚙️ Initializing go.mod for Terratest..."
-                                go mod init terratest
-                                go get github.com/gruntwork-io/terratest/modules/terraform
-                            fi
-                            go test -v ./... || echo "⚠️ Terratest failed (non-blocking)"
-                        else
-                            echo "ℹ️ No Terratest directory found, skipping..."
-                        fi
-                    '''
-                }
-            }
-        }
+stage('Terratest') {
+    when {
+    expression { params.TERRAFORM_ACTION == 'plan' }
+    }
+    steps {
+    dir("${env.TERRAFORM_DIR}") {
+        echo "🧪 Running Terratest for ${env.ENVIRONMENT}"
+        sh '''
+        if [ -d "tests" ]; then
+            echo "Running Terratest Go tests..."
+            cd tests
+
+            # Initialize module if missing
+            if [ ! -f "go.mod" ]; then
+            echo "⚙️ Initializing go.mod for Terratest..."
+            go mod init terratest
+            go get github.com/gruntwork-io/terratest/modules/terraform
+            fi
+
+            # Run Terratest (fail pipeline if tests fail)
+            echo "▶️ Executing Terratest..."
+            go test -v ./... | tee terratest-output.txt
+            test_result=${PIPESTATUS[0]}
+
+            if [ $test_result -ne 0 ]; then
+            echo "❌ Terratest failed! Stopping pipeline."
+            exit 1
+            else
+            echo "✅ Terratest passed successfully!"
+            fi
+        else
+            echo "ℹ️ No Terratest directory found, skipping..."
+        fi
+        '''
+    }
+    }
+}
 
         stage('Approvals') {
             when {
