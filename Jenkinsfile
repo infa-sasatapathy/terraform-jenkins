@@ -31,7 +31,7 @@ pipeline {
                 script {
                     def terraformDir = "infra"
                     def terraformRepo = "git@github.com:infa-sasatapathy/terraform-vpc.git"
-                    def terraformBranch = "main"
+                    def terraformBranch = "master"
 
                     echo "📦 Checking out Terraform repository from '${terraformBranch}' branch..."
 
