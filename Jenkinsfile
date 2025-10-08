@@ -5,7 +5,7 @@ pipeline {
         choice(
             name: 'ENVIRONMENT',
             choices: ['dev', 'stg', 'prod'],
-            description: 'Select the environment
+            description: 'Select the environment'
         )
         choice(
             name: 'TERRAFORM_ACTION',
