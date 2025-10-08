@@ -86,12 +86,11 @@ pipeline {
             }
         }
 
-        stage('Validate & Fmt') {
+        stage('Validate') {
             steps {
                 dir("${params.TERRAFORM_DIR}") {
                     sh """
                         set -e
-                        terraform fmt -recursive
                         terraform validate
                     """
                 }
