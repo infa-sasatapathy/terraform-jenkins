@@ -14,7 +14,7 @@ pipeline {
         )
         string(
             name: 'AWS_DEFAULT_REGION',
-            defaultValue: 'us-east-1',
+            defaultValue: 'ap-south-1',
             description: 'AWS region for Terraform deployment'
         )
     }
