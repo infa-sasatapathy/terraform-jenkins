@@ -67,21 +67,19 @@ pipeline {
                             set -e
                             export AWS_DEFAULT_REGION=${params.AWS_DEFAULT_REGION}
                             terraform init -reconfigure
-                            echo "✅ Terraform initialization completed successfully in region ${params.AWS_DEFAULT_REGION}."
+                            echo "✅ Terraform initialization completed successfully."
                         """
                     }
                 }
             }
         }
 
-        stage('Validate & Fmt') {
+        stage('Validate') {
             steps {
                 dir("${env.TERRAFORM_DIR}") {
                     echo "🔍 Running terraform fmt & validate checks"
                     sh """
                         set -e
-                        export AWS_DEFAULT_REGION=${params.AWS_DEFAULT_REGION}
-                        terraform fmt -recursive
                         terraform validate
                     """
                 }
@@ -99,31 +97,24 @@ pipeline {
                         def timestamp  = System.currentTimeMillis()
                         def planFile   = "terraform-${env.ENVIRONMENT}-${timestamp}.tfplan"
                         def regionVar  = "-var='region=${params.AWS_DEFAULT_REGION}'"
+                        def actionArg  = params.TERRAFORM_ACTION == 'destroy' ? '-destroy' : ''
 
-                        echo "🧩 Running Terraform ${params.TERRAFORM_ACTION} for ${env.ENVIRONMENT} in region ${params.AWS_DEFAULT_REGION}"
+                        echo "🧩 Running Terraform plan for ${env.ENVIRONMENT} in ${params.AWS_DEFAULT_REGION}"
 
-                        if (params.TERRAFORM_ACTION == 'destroy') {
-                            sh """
-                                set -e
-                                export AWS_DEFAULT_REGION=${params.AWS_DEFAULT_REGION}
-                                terraform plan -destroy -var-file=${tfvarsFile} ${regionVar} -out=${planFile} -input=false
-                            """
-                        } else {
-                            sh """
-                                set -e
-                                export AWS_DEFAULT_REGION=${params.AWS_DEFAULT_REGION}
-                                terraform plan -var-file=${tfvarsFile} ${regionVar} -out=${planFile} -input=false
-                            """
-                        }
+                        sh """
+                            set -e
+                            export AWS_DEFAULT_REGION=${params.AWS_DEFAULT_REGION}
+                            terraform plan ${actionArg} -var-file=${tfvarsFile} ${regionVar} -out=${planFile} -input=false
+                        """
 
                         archiveArtifacts artifacts: planFile, allowEmptyArchive: false
                         env.TF_PLAN_FILE = planFile
 
+                        // Keep only last 3 .tfplan files
                         echo "🧹 Cleaning up old Terraform plan files (keeping last 3)..."
                         sh """
                             ls -t terraform-*.tfplan | tail -n +4 | xargs -r rm -f || true
                         """
-                        echo "✅ Old plan cleanup complete."
                     }
                 }
             }
@@ -144,7 +135,6 @@ pipeline {
                                     echo "Running Terratest Go tests..."
                                     cd tests
                                     if [ ! -f "go.mod" ]; then
-                                        echo "⚙️ Initializing go.mod for Terratest..."
                                         go mod init terratest
                                         go get github.com/gruntwork-io/terratest/modules/terraform
                                     fi
@@ -166,21 +156,23 @@ pipeline {
             }
         }
 
-        stage('Approvals') {
+        // 🟡 Manual Approval (for apply/destroy only)
+        stage('Approval') {
             when {
                 expression { params.TERRAFORM_ACTION in ['apply', 'destroy'] }
             }
             steps {
-                timeout(time: 5, unit: 'MINUTES') {
-                    input message: "🟡 Approve Terraform ${params.TERRAFORM_ACTION} for ${env.ENVIRONMENT}?",
+                timeout(time: 10, unit: 'MINUTES') {
+                    input message: "🟡 Approve Terraform ${params.TERRAFORM_ACTION.toUpperCase()} for ${env.ENVIRONMENT}?",
                           ok: "✅ Proceed"
                 }
             }
         }
 
-        stage('Apply') {
+        // 🟢 APPLY INFRASTRUCTURE
+        stage('Apply Infrastructure') {
             when {
-                expression { params.TERRAFORM_ACTION in ['apply', 'destroy'] }
+                expression { params.TERRAFORM_ACTION == 'apply' }
             }
             steps {
                 dir("${env.TERRAFORM_DIR}") {
@@ -188,11 +180,33 @@ pipeline {
                         string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
                         string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
                     ]) {
-                        echo "🚀 Applying Terraform ${params.TERRAFORM_ACTION} for ${env.ENVIRONMENT} in region ${params.AWS_DEFAULT_REGION}"
+                        echo "🚀 Applying Terraform for ${env.ENVIRONMENT} in ${params.AWS_DEFAULT_REGION}"
                         sh """
                             set -e
                             export AWS_DEFAULT_REGION=${params.AWS_DEFAULT_REGION}
-                            terraform apply -var-file=${env.ENVIRONMENT}.tfvars -var="region=${params.AWS_DEFAULT_REGION}" -auto-approve ${env.TF_PLAN_FILE}
+                            terraform apply -auto-approve -var-file=${env.ENVIRONMENT}.tfvars -var="region=${params.AWS_DEFAULT_REGION}" ${env.TF_PLAN_FILE}
+                        """
+                    }
+                }
+            }
+        }
+
+        // 🔴 DESTROY INFRASTRUCTURE
+        stage('Destroy Infrastructure') {
+            when {
+                expression { params.TERRAFORM_ACTION == 'destroy' }
+            }
+            steps {
+                dir("${env.TERRAFORM_DIR}") {
+                    withCredentials([
+                        string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
+                        string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
+                    ]) {
+                        echo "💣 Destroying Terraform resources for ${env.ENVIRONMENT} in ${params.AWS_DEFAULT_REGION}"
+                        sh """
+                            set -e
+                            export AWS_DEFAULT_REGION=${params.AWS_DEFAULT_REGION}
+                            terraform destroy -auto-approve -var-file=${env.ENVIRONMENT}.tfvars -var="region=${params.AWS_DEFAULT_REGION}"
                         """
                     }
                 }
@@ -201,7 +215,7 @@ pipeline {
 
         stage('Completed') {
             steps {
-                echo "🎉 Terraform ${params.TERRAFORM_ACTION} completed successfully for ${env.ENVIRONMENT} in region ${params.AWS_DEFAULT_REGION}"
+                echo "🎉 Terraform ${params.TERRAFORM_ACTION} completed successfully for ${env.ENVIRONMENT} (${params.AWS_DEFAULT_REGION})"
             }
         }
     }
