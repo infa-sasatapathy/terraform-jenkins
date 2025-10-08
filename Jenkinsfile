@@ -124,7 +124,9 @@ stage('Terratest') {
     steps {
     dir("${env.TERRAFORM_DIR}") {
         echo "🧪 Running Terratest for ${env.ENVIRONMENT}"
-        sh '''
+        sh '''#!/bin/bash
+        set -e
+
         if [ -d "tests" ]; then
             echo "Running Terratest Go tests..."
             cd tests
