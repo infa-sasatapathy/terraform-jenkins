@@ -8,12 +8,12 @@ pipeline {
             description: 'Select the environment (automatically picks matching .tfvars)'
         )
         choice(
-            name: 'TERRAFORM ACTION',
+            name: 'TERRAFORM_ACTION',
             choices: ['plan', 'apply', 'destroy'],
             description: 'Choose Terraform action to perform'
         )
         string(
-            name: 'AWS DEFAULT REGION',
+            name: 'AWS_DEFAULT_REGION',
             defaultValue: 'us-east-1',
             description: 'AWS region for Terraform deployment'
         )
