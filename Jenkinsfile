@@ -5,7 +5,7 @@ pipeline {
         choice(
             name: 'ENVIRONMENT',
             choices: ['dev', 'stg', 'prod'],
-            description: 'Select the environment (automatically picks matching .tfvars)'
+            description: 'Select the environment (auto-picks matching .tfvars)'
         )
         choice(
             name: 'TERRAFORM_ACTION',
@@ -20,8 +20,9 @@ pipeline {
     }
 
     environment {
-        AWS_DEFAULT_REGION = "${params.AWS_DEFAULT_REGION}"
-        ENVIRONMENT        = "${params.ENVIRONMENT}"
+        AWS_DEFAULT_REGION = "${params.AWS_DEFAULT_REGION ?: 'us-east-1'}"
+        ENVIRONMENT        = "${params.ENVIRONMENT ?: 'dev'}"
+        TERRAFORM_ACTION   = "${params.TERRAFORM_ACTION ?: 'plan'}"
     }
 
     stages {
@@ -48,6 +49,7 @@ pipeline {
 
                     echo "✅ Terraform code checked out successfully into ./${terraformDir}/"
                     sh "ls -l ${terraformDir} || true"
+
                     env.TERRAFORM_DIR = terraformDir
                 }
             }
@@ -60,13 +62,13 @@ pipeline {
                         string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
                         string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
                     ]) {
-                        echo "⚙️ Initializing Terraform in region ${env.AWS_DEFAULT_REGION}..."
-                        sh '''
+                        echo "⚙️ Initializing Terraform in region ${params.AWS_DEFAULT_REGION}..."
+                        sh """
                             set -e
-                            export AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
+                            export AWS_DEFAULT_REGION=${params.AWS_DEFAULT_REGION}
                             terraform init -reconfigure
-                            echo "✅ Terraform initialization completed successfully in region ${AWS_DEFAULT_REGION}."
-                        '''
+                            echo "✅ Terraform initialization completed successfully in region ${params.AWS_DEFAULT_REGION}."
+                        """
                     }
                 }
             }
@@ -76,12 +78,12 @@ pipeline {
             steps {
                 dir("${env.TERRAFORM_DIR}") {
                     echo "🔍 Running terraform fmt & validate checks"
-                    sh '''
+                    sh """
                         set -e
-                        export AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
+                        export AWS_DEFAULT_REGION=${params.AWS_DEFAULT_REGION}
                         terraform fmt -recursive
                         terraform validate
-                    '''
+                    """
                 }
             }
         }
@@ -96,30 +98,32 @@ pipeline {
                         def tfvarsFile = "${env.ENVIRONMENT}.tfvars"
                         def timestamp  = System.currentTimeMillis()
                         def planFile   = "terraform-${env.ENVIRONMENT}-${timestamp}.tfplan"
+                        def regionVar  = "-var='region=${params.AWS_DEFAULT_REGION}'"
 
-                        echo "🧩 Running Terraform ${params.TERRAFORM_ACTION} for ${env.ENVIRONMENT} in region ${env.AWS_DEFAULT_REGION}"
+                        echo "🧩 Running Terraform ${params.TERRAFORM_ACTION} for ${env.ENVIRONMENT} in region ${params.AWS_DEFAULT_REGION}"
 
-                        def planCmd = (params.TERRAFORM_ACTION == 'destroy') ?
-                            "terraform plan -destroy -var-file=${tfvarsFile} -out=${planFile} -input=false" :
-                            "terraform plan -var-file=${tfvarsFile} -out=${planFile} -input=false"
-
-                        sh """
-                            set -e
-                            export AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
-                            ${planCmd}
-                        """
+                        if (params.TERRAFORM_ACTION == 'destroy') {
+                            sh """
+                                set -e
+                                export AWS_DEFAULT_REGION=${params.AWS_DEFAULT_REGION}
+                                terraform plan -destroy -var-file=${tfvarsFile} ${regionVar} -out=${planFile} -input=false
+                            """
+                        } else {
+                            sh """
+                                set -e
+                                export AWS_DEFAULT_REGION=${params.AWS_DEFAULT_REGION}
+                                terraform plan -var-file=${tfvarsFile} ${regionVar} -out=${planFile} -input=false
+                            """
+                        }
 
                         archiveArtifacts artifacts: planFile, allowEmptyArchive: false
                         env.TF_PLAN_FILE = planFile
 
-                        // 🧹 Cleanup old plan files — keep last 3
                         echo "🧹 Cleaning up old Terraform plan files (keeping last 3)..."
-                        sh '''
-                            set -e
-                            cd ${WORKSPACE}/${TERRAFORM_DIR}
+                        sh """
                             ls -t terraform-*.tfplan | tail -n +4 | xargs -r rm -f || true
-                            echo "✅ Old plan cleanup complete."
-                        '''
+                        """
+                        echo "✅ Old plan cleanup complete."
                     }
                 }
             }
@@ -132,34 +136,32 @@ pipeline {
             steps {
                 dir("${env.TERRAFORM_DIR}") {
                     echo "🧪 Running Terratest for ${env.ENVIRONMENT}"
-                    sh '''#!/bin/bash
-                        set -e
-                        export AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
-
-                        if [ -d "tests" ]; then
-                            echo "Running Terratest Go tests..."
-                            cd tests
-
-                            if [ ! -f "go.mod" ]; then
-                                echo "⚙️ Initializing go.mod for Terratest..."
-                                go mod init terratest
-                                go get github.com/gruntwork-io/terratest/modules/terraform
-                            fi
-
-                            echo "▶️ Executing Terratest..."
-                            go test -v ./... | tee terratest-output.txt
-                            result=${PIPESTATUS[0]}
-
-                            if [ $result -ne 0 ]; then
-                                echo "❌ Terratest failed! Stopping pipeline."
-                                exit 1
-                            else
-                                echo "✅ Terratest passed successfully!"
-                            fi
-                        else
-                            echo "ℹ️ No Terratest directory found, skipping..."
-                        fi
-                    '''
+                    script {
+                        def terratestResult = sh(
+                            script: """
+                                set -e
+                                if [ -d "tests" ]; then
+                                    echo "Running Terratest Go tests..."
+                                    cd tests
+                                    if [ ! -f "go.mod" ]; then
+                                        echo "⚙️ Initializing go.mod for Terratest..."
+                                        go mod init terratest
+                                        go get github.com/gruntwork-io/terratest/modules/terraform
+                                    fi
+                                    go test -v ./...
+                                else
+                                    echo "ℹ️ No Terratest directory found, skipping..."
+                                    exit 0
+                                fi
+                            """,
+                            returnStatus: true
+                        )
+                        if (terratestResult != 0) {
+                            error("❌ Terratest failed — stopping pipeline.")
+                        } else {
+                            echo "✅ Terratest passed successfully."
+                        }
+                    }
                 }
             }
         }
@@ -186,11 +188,11 @@ pipeline {
                         string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
                         string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
                     ]) {
-                        echo "🚀 Applying Terraform ${params.TERRAFORM_ACTION} for ${env.ENVIRONMENT} in ${env.AWS_DEFAULT_REGION}"
+                        echo "🚀 Applying Terraform ${params.TERRAFORM_ACTION} for ${env.ENVIRONMENT} in region ${params.AWS_DEFAULT_REGION}"
                         sh """
                             set -e
-                            export AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
-                            terraform apply -var-file=${env.ENVIRONMENT}.tfvars -auto-approve ${env.TF_PLAN_FILE}
+                            export AWS_DEFAULT_REGION=${params.AWS_DEFAULT_REGION}
+                            terraform apply -var-file=${env.ENVIRONMENT}.tfvars -var="region=${params.AWS_DEFAULT_REGION}" -auto-approve ${env.TF_PLAN_FILE}
                         """
                     }
                 }
@@ -199,17 +201,17 @@ pipeline {
 
         stage('Completed') {
             steps {
-                echo "🎉 Terraform ${params.TERRAFORM_ACTION} completed successfully for ${env.ENVIRONMENT} in region ${env.AWS_DEFAULT_REGION}"
+                echo "🎉 Terraform ${params.TERRAFORM_ACTION} completed successfully for ${env.ENVIRONMENT} in region ${params.AWS_DEFAULT_REGION}"
             }
         }
     }
 
     post {
         success {
-            echo "✅ Pipeline executed successfully for ${env.ENVIRONMENT}"
+            echo "✅ Pipeline executed successfully for ${env.ENVIRONMENT} (${params.AWS_DEFAULT_REGION})"
         }
         failure {
-            echo "❌ Pipeline failed for ${env.ENVIRONMENT}"
+            echo "❌ Pipeline failed for ${env.ENVIRONMENT} (${params.AWS_DEFAULT_REGION})"
         }
         always {
             echo "📘 Jenkins Terraform pipeline finished"
