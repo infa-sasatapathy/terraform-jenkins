@@ -91,7 +91,7 @@ pipeline {
             steps {
                 dir("${env.TERRAFORM_DIR}") {
                     echo "🔍 Running terraform validate checks"
-                    sh terraform validate
+                    sh "terraform validate"
                 }
             }
         }
