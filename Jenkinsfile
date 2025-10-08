@@ -5,15 +5,15 @@ pipeline {
         choice(
             name: 'ENVIRONMENT',
             choices: ['dev', 'stg', 'prod'],
-            description: 'Select the environment (automatically picks matching .tfvars)'
+            description: 'Select the environment to run'
         )
         choice(
-            name: 'TERRAFORM_ACTION',
+            name: 'TERRAFORM ACTION',
             choices: ['plan', 'apply', 'destroy'],
             description: 'Choose Terraform action to perform'
         )
         string(
-            name: 'AWS_DEFAULT_REGION',
+            name: 'AWS DEFAULT REGION',
             defaultValue: 'us-east-1',
             description: 'AWS region for Terraform deployment'
         )
@@ -87,15 +87,11 @@ pipeline {
         }
 
 
-        stage('Validate & Fmt') {
+        stage('Validate') {
             steps {
                 dir("${env.TERRAFORM_DIR}") {
-                    echo "🔍 Running terraform fmt & validate checks"
-                    sh '''
-                        # Auto-format and validate
-                        terraform fmt -recursive
-                        terraform validate
-                    '''
+                    echo "🔍 Running terraform validate checks"
+                    sh terraform validate
                 }
             }
         }
