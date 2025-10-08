@@ -5,15 +5,15 @@ pipeline {
         choice(
             name: 'ENVIRONMENT',
             choices: ['dev', 'stg', 'prod'],
-            description: 'Select the environment to run'
+            description: 'Select the environment (automatically picks matching .tfvars)'
         )
         choice(
-            name: 'TERRAFORM ACTION',
+            name: 'TERRAFORM_ACTION',
             choices: ['plan', 'apply', 'destroy'],
             description: 'Choose Terraform action to perform'
         )
         string(
-            name: 'AWS DEFAULT REGION',
+            name: 'AWS_DEFAULT_REGION',
             defaultValue: 'us-east-1',
             description: 'AWS region for Terraform deployment'
         )
@@ -24,46 +24,31 @@ pipeline {
         ENVIRONMENT        = "${params.ENVIRONMENT}"
     }
 
-    stages {
+    stages {   // ✅ All stages enclosed here
 
         stage('Checkout Terraform Repo') {
             steps {
                 script {
                     def terraformDir = "infra"
                     def terraformRepo = "git@github.com:infa-sasatapathy/terraform-vpc.git"
+                    def terraformBranch = "main"
 
-                    echo "📦 Checking out Terraform repository..."
+                    echo "📦 Checking out Terraform repository from '${terraformBranch}' branch..."
 
-                    // Try main first, then fallback to master
-                    try {
-                        dir(terraformDir) {
-                            checkout([
-                                $class: 'GitSCM',
-                                branches: [[name: "*/master"]],
-                                userRemoteConfigs: [[
-                                    url: terraformRepo,
-                                    credentialsId: 'jenkins'
-                                ]]
-                            ])
-                        }
-                    } catch (Exception e) {
-                        echo "⚠️ 'main' branch not found, retrying with 'master'..."
-                        dir(terraformDir) {
-                            checkout([
-                                $class: 'GitSCM',
-                                branches: [[name: "*/master"]],
-                                userRemoteConfigs: [[
-                                    url: terraformRepo,
-                                    credentialsId: 'jenkins'
-                                ]]
-                            ])
-                        }
+                    dir(terraformDir) {
+                        checkout([
+                            $class: 'GitSCM',
+                            branches: [[name: "*/${terraformBranch}"]],
+                            userRemoteConfigs: [[
+                                url: terraformRepo,
+                                credentialsId: 'jenkins'
+                            ]]
+                        ])
                     }
 
                     echo "✅ Terraform code checked out successfully into ./${terraformDir}/"
                     sh "ls -l ${terraformDir} || true"
 
-                    // Save path for other stages
                     env.TERRAFORM_DIR = terraformDir
                 }
             }
@@ -71,27 +56,29 @@ pipeline {
 
         stage('Init') {
             steps {
-            dir("${env.TERRAFORM_DIR}") {
-                withCredentials([
-                string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
-                string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
-                ]) {
-                echo "⚙️ Initializing Terraform..."
-                sh '''
-                    terraform init -reconfigure
-                    echo "Terraform initialization completed successfully."
-                '''
+                dir("${env.TERRAFORM_DIR}") {
+                    withCredentials([
+                        string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
+                        string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
+                    ]) {
+                        echo "⚙️ Initializing Terraform..."
+                        sh '''
+                            terraform init -reconfigure
+                            echo "Terraform initialization completed successfully."
+                        '''
+                    }
                 }
-            }
             }
         }
 
-
-        stage('Validate') {
+        stage('Validate & Fmt') {
             steps {
                 dir("${env.TERRAFORM_DIR}") {
-                    echo "🔍 Running terraform validate checks"
-                    sh "terraform validate"
+                    echo "🔍 Running terraform fmt & validate checks"
+                    sh '''
+                        terraform fmt -recursive
+                        terraform validate
+                    '''
                 }
             }
         }
@@ -109,7 +96,6 @@ pipeline {
 
                         echo "🧩 Running Terraform plan for ${env.ENVIRONMENT} using ${tfvarsFile}"
 
-                        // Plan (or destroy plan)
                         if (params.TERRAFORM_ACTION == 'destroy') {
                             sh """
                                 terraform plan -destroy \
@@ -187,7 +173,7 @@ pipeline {
                 echo "🎉 Terraform ${params.TERRAFORM_ACTION} completed successfully for ${env.ENVIRONMENT}"
             }
         }
-    }
+    }  // ✅ end of stages
 
     post {
         success {
