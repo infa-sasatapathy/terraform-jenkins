@@ -24,7 +24,7 @@ pipeline {
         )
         string(
             name: 'TERRAFORM_BRANCH',
-            defaultValue: 'main',
+            defaultValue: 'master',
             description: 'Git branch to checkout (e.g., main or master)'
         )
         string(
